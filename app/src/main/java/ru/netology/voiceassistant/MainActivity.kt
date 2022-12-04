@@ -1,8 +1,11 @@
 package ru.netology.voiceassistant
 
+import android.content.Intent
 import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
 import android.os.Message
+import android.speech.RecognizerIntent
+import android.speech.tts.TextToSpeech
 import android.util.Log
 import android.view.Menu
 import android.view.MenuItem
@@ -21,6 +24,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.*
+import kotlin.collections.HashMap
 
 
 class MainActivity : AppCompatActivity() {
@@ -37,7 +42,13 @@ class MainActivity : AppCompatActivity() {
 
     lateinit var waEngine: WAEngine
 
+    lateinit var textToSpeech: TextToSpeech
+
+    var isTtsReady: Boolean = false
+
     val pods = mutableListOf<HashMap<String, String>>()
+
+    val VOICE_RECOGNITION_REQUEST_CODE: Int = 666
 
     override fun onCreate(savedInstanceState: Bundle?) {
         Log.d(TAG, "start of onCreate function")
@@ -45,6 +56,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
         initViews()
         initWolframEngine()
+        initTts()
     }
 
     fun initViews() {
@@ -73,10 +85,24 @@ class MainActivity : AppCompatActivity() {
             intArrayOf(R.id.title, R.id.content)
         )
         podsList.adapter = podsAdapter
+        podsList.setOnItemClickListener { parent, view, position, id ->
+            if (isTtsReady) {
+                val title = pods[position]["Title"]
+                val content = pods[position]["Content"]
+                textToSpeech.speak(content, TextToSpeech.QUEUE_FLUSH, null, title)
+            }
+        }
 
         val voiceInputButton: FloatingActionButton = findViewById(R.id.voice_input)
         voiceInputButton.setOnClickListener {
-            Log.d(TAG, "FAB")
+            pods.clear()
+            podsAdapter.notifyDataSetChanged()
+
+            if (isTtsReady) {
+                textToSpeech.stop()
+            }
+
+            showVoiceInputDialog()
         }
 
         progressBar = findViewById(R.id.progress_bar)
@@ -90,7 +116,9 @@ class MainActivity : AppCompatActivity() {
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         when(item.itemId) {
             R.id.action_stop -> {
-                Log.d(TAG, "action stop")
+                if (isTtsReady) {
+                    textToSpeech.stop()
+                }
                 return true
             }
             R.id.action_clear -> {
@@ -160,6 +188,42 @@ class MainActivity : AppCompatActivity() {
                     progressBar.visibility = View.GONE
                     showSnackBar(t.message ?: getString(R.string.error_something_went_wrong))
                 }
+            }
+        }
+    }
+
+    fun initTts() {
+        textToSpeech = TextToSpeech(this) { code ->
+            if (code != TextToSpeech.SUCCESS) {
+                Log.e(TAG, "TTS error code: $code")
+                showSnackBar(getString(R.string.error_tts_is_not_ready))
+            } else {
+                isTtsReady = true
+            }
+        }
+        textToSpeech.language = Locale.US
+    }
+
+    fun showVoiceInputDialog() {
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_PROMPT, getString(R.string.request_hint))
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.US)
+        }
+
+        kotlin.runCatching {
+            startActivityForResult(intent, VOICE_RECOGNITION_REQUEST_CODE)
+        }.onFailure { t->
+            showSnackBar(t.message ?: getString(R.string.error_voice_recognition_unavailable))
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == VOICE_RECOGNITION_REQUEST_CODE && resultCode == RESULT_OK) {
+            data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.get(0)?.let { question ->
+                requestInput.setText(question)
+                askWolfram(question)
             }
         }
     }
